@@ -1,3 +1,2 @@
-unvisited.csv
-small.csv
-output.csv
+*.csv
+*.jar
