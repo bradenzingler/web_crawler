@@ -5,7 +5,8 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import com.panforge.robotstxt.RobotsTxt;        //https://github.com/pandzel/RobotsTxt
- 
+
+
 import java.io.InputStream;
 import java.io.File;
 import java.io.FileWriter;
@@ -22,9 +23,12 @@ import java.util.Scanner;
 import java.util.Set;
 import javax.print.Doc;
 import java.lang.Thread;
+import java.util.Random;
+import java.lang.Thread;
 
 
 public class Crawler {
+
 
     public static void main(String[] args) {
         try {
@@ -36,11 +40,16 @@ public class Crawler {
             FileWriter writer = new FileWriter(unvisitedCSV, true);
             FileWriter out = new FileWriter(output, true);
             ArrayList<String> visited = new ArrayList<>();
+
+            String destination = "Whale";
+
+            Double pastSimilarity = 0.0;
             
             // Read through all site urls
-            while (scnr.hasNextLine()) {
+            while (scnr.hasNextLine() && pastSimilarity < 1.0) {
 
                 // Get site url from csv
+                Thread.sleep(1000);
                 String[] parts = scnr.nextLine().split(",");
                 String stringUrl = parts[1].replace("\"", "");
 
@@ -48,6 +57,11 @@ public class Crawler {
                     if (!visited.contains(stringUrl)) {
                         visited.add(stringUrl);
                         String url = stringUrl.contains("https") ? stringUrl :  "https://" + stringUrl;
+
+                        if (url.equals("https://en.wikipedia.org/wiki/" + destination)) {
+                            System.out.println("Found " + destination + " at " + url);
+                            break;
+                        }
                         
                         // Check robots.txt
                         if (!isAllowedByRobotsTxt(url)) continue;
@@ -64,13 +78,28 @@ public class Crawler {
                         out.append(stringUrl+ ", " + doc.title() + ", " + relevantKeywords.toString() + "\n");
                         out.flush();
                         
-                        // Add any discovered links to the csv to continue scraping
-                        // This will add discovered links to the end of the queue.
-                        // Set<String> links = extractLinks(doc);
-                        // for (String link : links) {
-                        //     writer.append("fill," + link + ",fill\n");
-                        //     writer.flush();
-                        // }
+                        List<String> links = extractLinks(doc);
+                        for (String link : links) {
+                            Double currSimilarity = similarity(link, "https://en.wikipedia.org/wiki/"+destination);
+                            if (currSimilarity == 1.0) {
+                                pastSimilarity = currSimilarity;
+                                System.out.println("Found " + destination + " at " + link);
+                                break;
+                            } 
+
+                            if (currSimilarity > pastSimilarity && link.contains("en.wikipedia.org/wiki/") && !visited.contains(link)){
+                                pastSimilarity = currSimilarity;
+                                writer.append(pastSimilarity+", " + link + ", fill\n");
+                                writer.flush();
+                            } else {
+                                // backtracking because dead end
+                                if (currSimilarity < pastSimilarity && link.contains("en.wikipedia.org/wiki/") && !visited.contains(link)){
+                                    pastSimilarity = currSimilarity;
+                                    writer.append(pastSimilarity+", " + link + ", fill\n");
+                                    writer.flush();
+                                }
+                            }
+                        }
 
                         System.out.println("Scraped " + url);
                     }
@@ -78,12 +107,62 @@ public class Crawler {
                     System.out.println("Error: " + stringUrl);
                 }
             }
+            System.out.println("Path: ");
+            for (String link : visited) {
+                System.out.print("\n"+link+"->");
+            }
                 out.close();
                 writer.close();
+                scnr.close();
         }  catch(Exception e) {
             System.out.println("Failed to read/write file: "+e);
         }
     }
+
+    /**
+   * Calculates the similarity (a number within 0 and 1) between two strings.
+   */
+    public static double similarity(String s1, String s2) {
+        String longer = s1, shorter = s2;
+        if (s1.length() < s2.length()) { // longer should always have greater length
+        longer = s2; shorter = s1;
+        }
+        int longerLength = longer.length();
+        if (longerLength == 0) { return 1.0; /* both strings are zero length */ }
+        /* // If you have Apache Commons Text, you can use it to calculate the edit distance:
+        LevenshteinDistance levenshteinDistance = new LevenshteinDistance();
+        return (longerLength - levenshteinDistance.apply(longer, shorter)) / (double) longerLength; */
+        return (longerLength - editDistance(longer, shorter)) / (double) longerLength;
+
+    }
+
+    public static int editDistance(String s1, String s2) {
+        s1 = s1.toLowerCase();
+        s2 = s2.toLowerCase();
+    
+        int[] costs = new int[s2.length() + 1];
+        for (int i = 0; i <= s1.length(); i++) {
+          int lastValue = i;
+          for (int j = 0; j <= s2.length(); j++) {
+            if (i == 0)
+              costs[j] = j;
+            else {
+              if (j > 0) {
+                int newValue = costs[j - 1];
+                if (s1.charAt(i - 1) != s2.charAt(j - 1))
+                  newValue = Math.min(Math.min(newValue, lastValue),
+                      costs[j]) + 1;
+                costs[j - 1] = lastValue;
+                lastValue = newValue;
+              }
+            }
+          }
+          if (i > 0)
+            costs[s2.length()] = lastValue;
+        }
+        return costs[s2.length()];
+      }
+
 
 
     /**
@@ -143,8 +222,8 @@ public class Crawler {
      * @param doc The document to extract the links from
      * @return The set of links
      */
-    private static Set<String> extractLinks(Document doc) {
-        Set<String> links = new HashSet<>();
+    private static List<String> extractLinks(Document doc) {
+        List<String> links = new ArrayList<>();
         Elements elements = doc.select("a[href]");
         for (Element element : elements) {
             String absUrl = element.absUrl("href");
