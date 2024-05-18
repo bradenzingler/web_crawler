@@ -78,7 +78,12 @@ public class Crawler {
 
 
     /**
-     * Sends a url and it's keywords to the database.
+     * Send the URL and keywords to the database
+     * @param url The URL to send
+     * @param keywords The keywords to send
+     * @throws SQLException If there is an error writing to the database
+     * @throws ClassNotFoundException If the SQLite driver is not found
+     * @throws Exception If there is an error closing the resources
      */
     public static void sendToDatabase(String url, List<String> keywords) {
         PreparedStatement pstm = null;
