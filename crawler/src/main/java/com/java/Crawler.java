@@ -1,76 +1,67 @@
+/**
+ * A simple web crawler that extracts keywords from a website.
+ * The keywords are then lemmatized and output to a relational database,
+ * along with the urls.
+ * Braden Zingler
+ */
+
 package com.java;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import com.panforge.robotstxt.RobotsTxt;        //https://github.com/pandzel/RobotsTxt
- 
-import java.io.InputStream;
 import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Scanner;
-import java.util.Set;
-import javax.print.Doc;
-import java.lang.Thread;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
 
 public class Crawler {
 
     public static void main(String[] args) {
-        try {
 
-            // Initialize web crawler, input/output files
-            File unvisitedCSV = new File("crawler/src/main/resources/small.csv");
-            File output = new File("crawler/src/main/resources/output.csv");
-            Scanner scnr = new Scanner(unvisitedCSV);
-            FileWriter writer = new FileWriter(unvisitedCSV, true);
-            FileWriter out = new FileWriter(output, true);
+        
+        try {
+            // Set up the dataset of links to visit
+            File urlsToVisit = new File("crawler/src/main/resources/unvisited.csv");
+            Scanner scnr = new Scanner(urlsToVisit);
+            FileWriter writer = new FileWriter(urlsToVisit, true);
+
+            // Read in the lemmatization values
+            Lemmatizer lem = new Lemmatizer();
+
+            // Set up tracking for already visited links
             ArrayList<String> visited = new ArrayList<>();
             
-            // Read through all site urls
+            // Iterate through the links to visit
             while (scnr.hasNextLine()) {
-
-                // Get site url from csv
-                String[] parts = scnr.nextLine().split(",");
-                String stringUrl = parts[1].replace("\"", "");
-
+                String stringUrl = scnr.nextLine().split(",")[1].replace("\"", "").strip();
                 try {
-                    if (!visited.contains(stringUrl)) {
+                    if (!visited.contains(stringUrl)){
                         visited.add(stringUrl);
                         String url = stringUrl.contains("https") ? stringUrl :  "https://" + stringUrl;
                         
                         // Check robots.txt
                         if (!isAllowedByRobotsTxt(url)) continue;
                         Document doc = Jsoup.connect(url).get();
+                        doc.outputSettings().charset("UTF-8");
 
                         // Get keywords
-                        String text = extractText(doc);
-                        String[] words = text.split("\\s+");
-                        List<String> keywords = filterKeywords(words);
-                        Map<String, Integer> frequencyMap = countFrequency(keywords);
-                        List<String> relevantKeywords = selectKeywords(frequencyMap);
+                        String text = doc.select("p, h1, h2, h3, h4, h5, h6, title").text();
+                        String[] words = text.split(" ");
+                        List<String> keywords = filterKeywords(words, lem);
 
-                        // Output information parsed to output.csv
-                        out.append(stringUrl+ ", " + doc.title() + ", " + relevantKeywords.toString() + "\n");
-                        out.flush();
-                        
-                        // Add any discovered links to the csv to continue scraping
-                        // This will add discovered links to the end of the queue.
-                        // Set<String> links = extractLinks(doc);
-                        // for (String link : links) {
-                        //     writer.append("fill," + link + ",fill\n");
-                        //     writer.flush();
-                        // }
+                        // Output information to the database
+                        sendToDatabase(url, keywords);
 
                         System.out.println("Scraped " + url);
                     }
@@ -78,10 +69,112 @@ public class Crawler {
                     System.out.println("Error: " + stringUrl);
                 }
             }
-                out.close();
                 writer.close();
+                scnr.close();
         }  catch(Exception e) {
             System.out.println("Failed to read/write file: "+e);
+        }
+    }
+
+
+    /**
+     * Sends a url and it's keywords to the database.
+     */
+    public static void sendToDatabase(String url, List<String> keywords) {
+        PreparedStatement pstm = null;
+        ResultSet rs = null;
+        Connection conn = null;
+        try {
+            conn = DriverManager.getConnection("jdbc:sqlite:wikipedia.db");
+            Statement stmt = conn.createStatement();
+            conn.setAutoCommit(false);
+
+            // Create the urls table
+            String createUrlTable = "CREATE TABLE IF NOT EXISTS urls ("
+                                    + "url_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                    + "url TEXT UNIQUE)";
+            stmt.execute(createUrlTable);
+
+            // Create the keywords table
+            String createKeywordsTable = "CREATE TABLE IF NOT EXISTS keywords (keyword_id INTEGER PRIMARY KEY AUTOINCREMENT, keyword TEXT UNIQUE)";
+            stmt.execute(createKeywordsTable);
+
+            // Create the url-keywords table
+            String createAssociationTable = "CREATE TABLE IF NOT EXISTS url_keywords("
+                                            + "url_id INTEGER, "
+                                            + "keyword_id INTEGER, "
+                                            + "PRIMARY KEY (url_id, keyword_id), "
+                                            + "UNIQUE (url_id, keyword_id), "
+                                            + "FOREIGN KEY (url_id) REFERENCES urls(url_id), "
+                                            + "FOREIGN KEY (keyword_id) REFERENCES keywords(keyword_id))";
+            stmt.execute(createAssociationTable);
+
+            // Add url to urls table and save the ids
+            String addUrl = "INSERT OR IGNORE INTO urls (url) VALUES (?)";
+            pstm = conn.prepareStatement(addUrl, Statement.RETURN_GENERATED_KEYS);
+            pstm.setString(1, url);
+            pstm.executeUpdate();
+            rs = pstm.getGeneratedKeys();
+            int urlId;
+            if (rs.next()) {
+                urlId = rs.getInt(1);
+            } else {
+                // If the URL already exists, fetch the existing url_id
+                String selectUrlIdSQL = "SELECT url_id FROM urls WHERE url = ?";
+                pstm = conn.prepareStatement(selectUrlIdSQL);
+                pstm.setString(1, url);
+                rs = pstm.executeQuery();
+                if (rs.next()) {
+                    urlId = rs.getInt("url_id");
+                } else {
+                    throw new SQLException("Failed to retrieve URL ID");
+                }
+            }
+
+            // Insert each keyword and get keyword ids
+            String insertKeyword = "INSERT OR IGNORE INTO keywords (keyword) VALUES (?)";
+            String selectKeywordId = "SELECT keyword_id FROM keywords WHERE keyword = ?";
+            for (String keyword : keywords) {
+                pstm = conn.prepareStatement(insertKeyword);
+                pstm.setString(1, keyword);
+                pstm.executeUpdate();
+
+                pstm = conn.prepareStatement(selectKeywordId);
+                pstm.setString(1, keyword);
+                rs = pstm.executeQuery();
+                int keywordId;
+                if (rs.next()) {
+                    keywordId = rs.getInt("keyword_id");
+                } else {
+                    throw new SQLException("Failed to retrieve keyword ID");
+                }
+
+                // Step 3: Insert URL-Keyword association
+                String insertUrlKeywordSQL = "INSERT OR IGNORE INTO url_keywords (url_id, keyword_id) VALUES (?, ?)";
+                pstm = conn.prepareStatement(insertUrlKeywordSQL);
+                pstm.setInt(1, urlId);
+                pstm.setInt(2, keywordId);
+                pstm.executeUpdate();
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            try {
+                if (conn != null) {
+                    conn.rollback();
+                }
+            } catch (SQLException ex) {
+                System.out.println("Failed to rollback transaction: " + ex.getMessage());
+            }
+            System.out.println("Failed to write to database: " + e.getMessage());
+        } finally {
+            // close all resources
+            try {
+                if (rs != null) rs.close();
+                if (pstm != null) pstm.close();
+                if (conn != null) conn.close();
+            } catch (SQLException e) {
+                System.out.println("Failed to close resources: " + e.getMessage());
+            }
         }
     }
 
@@ -110,75 +203,39 @@ public class Crawler {
 
 
     /**
-     * Extract the text from the document
-     * @param doc The document to extract the text from
-     * @return The text extracted from the document
-     */
-    private static String extractText(Document doc) {
-        StringBuilder textBuilder = new StringBuilder();
-        Elements elements = doc.select("p, h1, h2, h3, h4, h5, h6, title");
-        for (Element element : elements) {
-            textBuilder.append(element.text()).append(" ");
-        }
-        return textBuilder.toString();
-    }
-
-
-    /**
-     * Count the frequency of each keyword
-     * @param keywords The list of keywords
-     * @return The frequency map of the keywords
-     */
-    private static Map<String, Integer> countFrequency(List<String> keywords) {
-        Map<String, Integer> frequencyMap = new HashMap<>();
-        for (String keyword : keywords) {
-            frequencyMap.put(keyword, frequencyMap.getOrDefault(keyword, 0) + 1);
-        }
-        return frequencyMap;
-    }
-
-
-    /**
-     * Extract all the links from the document to crawl
-     * @param doc The document to extract the links from
-     * @return The set of links
-     */
-    private static Set<String> extractLinks(Document doc) {
-        Set<String> links = new HashSet<>();
-        Elements elements = doc.select("a[href]");
-        for (Element element : elements) {
-            String absUrl = element.absUrl("href");
-            links.add(absUrl);
-        }
-        return links;
-    }
-
-
-    /**
      * Filter out the stopwords from the list of words
      * @param words The list of words
      * @return The list of words without the stopwords
      */
-    private static List<String> filterKeywords(String[] words) {
-        List<String> filteredKeywords = new ArrayList<>();
-        for (String word : words) {
-            if (!isStopword(word)) {
-                filteredKeywords.add(word);
+    private static List<String> filterKeywords(String[] words, Lemmatizer lem) {
+        try {
+            List<String> filteredKeywords = new ArrayList<>();
+            for (String word : words) {
+                if (!isStopword(word) && isWord(word)) {
+                    String newWord = lem.lemmatizeWord(word.toLowerCase());
+                    filteredKeywords.add(newWord);
+                }
             }
+            return filteredKeywords;
+        } catch (Exception e) {
+            System.out.println("Error while filtering keywords: " + e);
         }
-        return filteredKeywords;
+        return null;
     }
 
-    
+
     /**
-     * Select the top 10 keywords with the highest frequency
-     * @param frequencyMap The frequency map of the keywords
-     * @return  The top 10 keywords with the highest frequency
+     * Checks if the current word is a word and does not contain special characters.
+     * @param word the word to check.
+     * @return true if doesn't contain the ignored characters, false otherwise.
      */
-    private static List<String> selectKeywords(Map<String, Integer> frequencyMap) {
-        List<String> relevantKeywords = new ArrayList<>(frequencyMap.keySet());
-        relevantKeywords.sort(Comparator.comparingInt(frequencyMap::get).reversed());
-        return relevantKeywords.subList(0, Math.min(relevantKeywords.size(), 7));
+    private static boolean isWord(String word) {
+        try {
+            return word.matches("\\b\\w+\\b");
+        } catch (Exception e) {
+            System.out.println("An error occurred while checking if " + word + " is a word: " + e);
+        }
+        return false;
     }
 
 
@@ -188,10 +245,15 @@ public class Crawler {
      * @return True if the word is a stopword, false otherwise
      */
     private static boolean isStopword(String word) {
-        String[] stopWords = new String[] {"a","about","above","according","across","actually","after","again","against","all","almost","also","although","always","am","among","amongst","an","and","any","anything","anyway","are","as","at","be","became","become","because","been","before","being","below","between","both","but","by","can","could","did","do","does","doing","down","during","each","either","else","few","for","from","further","had","has","have","having","he","he'd","he'll","hence","he's","her","here","here's","hers","herself","him","himself","his","how","how's","I","I'd","I'll","I'm","I've","if","in","into","is","it","it's","its","itself","just","let's","may","maybe","me","might","mine","more","most","must","my","myself","neither","nor","not","of","oh","on","once","only","ok","or","other","ought","our","ours","ourselves","out","over","own","same","she","she'd","she'll","she's","should","so","some","such","than","that","that's","the","their","theirs","them","themselves","then","there","there's","these","they","they'd","they'll","they're","they've","this","those","through","to","too","under","until","up","very","was","we","we'd","we'll","we're","we've","were","what","what's","when","whenever","when's","where","whereas","wherever","where's","whether","which","while","who","whoever","who's","whose","whom","why","why's","will","with","within","would","yes","yet","you","you'd","you'll","you're","you've","your","yours","yourself","yourselves"};
-        for (String stopWord : stopWords) {
-            if (word.equalsIgnoreCase(stopWord)) return true;
+        try {
+            String[] stopWords = new String[] {"a","about","above","according","across","actually","after","again","against","all","almost","also","although","always","am","among","amongst","an","and","any","anything","anyway","are","as","at","be","became","become","because","been","before","being","below","between","both","but","by","can","could","did","do","does","doing","down","during","each","either","else","few","for","from","further","had","has","have","having","he","he'd","he'll","hence","he's","her","here","here's","hers","herself","him","himself","his","how","how's","I","I'd","I'll","I'm","I've","if","in","into","is","it","it's","its","itself","just","let's","may","maybe","me","might","mine","more","most","must","my","myself","neither","nor","not","of","oh","on","once","only","ok","or","other","ought","our","ours","ourselves","out","over","own","same","she","she'd","she'll","she's","should","so","some","such","than","that","that's","the","their","theirs","them","themselves","then","there","there's","these","they","they'd","they'll","they're","they've","this","those","through","to","too","under","until","up","very","was","we","we'd","we'll","we're","we've","were","what","what's","when","whenever","when's","where","whereas","wherever","where's","whether","which","while","who","whoever","who's","whose","whom","why","why's","will","with","within","would","yes","yet","you","you'd","you'll","you're","you've","your","yours","yourself","yourselves"};
+            for (String stopWord : stopWords) {
+                if (word.equalsIgnoreCase(stopWord)) return true;
+            }
+            return false;
+        } catch (Exception e) {
+            System.out.println("An error occurred while checking if is stopword: " + e);
         }
-        return false;
+        return true;
     }
 }
