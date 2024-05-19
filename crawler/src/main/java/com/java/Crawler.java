@@ -28,11 +28,9 @@ import java.sql.Statement;
 public class Crawler {
 
     public static void main(String[] args) {
-
-        
         try {
             // Set up the dataset of links to visit
-            File urlsToVisit = new File("crawler/src/main/resources/unvisited.csv");
+            File urlsToVisit = new File("crawler/src/main/resources/small.csv");
             Scanner scnr = new Scanner(urlsToVisit);
             FileWriter writer = new FileWriter(urlsToVisit, true);
 
@@ -46,22 +44,36 @@ public class Crawler {
             while (scnr.hasNextLine()) {
                 String stringUrl = scnr.nextLine().split(",")[1].replace("\"", "").strip();
                 try {
-                    if (!visited.contains(stringUrl)){
+                    if (!visited.contains(stringUrl) && stringUrl.startsWith("https://en.wikipedia.org/wiki")
+                    && !stringUrl.contains("Main_Page") && !stringUrl.contains("Special:")
+                    && !stringUrl.contains("Help:") && !stringUrl.contains("File:")
+                    && !stringUrl.contains("Template:") && !stringUrl.contains("Category:")
+                    && !stringUrl.contains("Wikipedia:") && !stringUrl.contains("Portal:")
+                    && !stringUrl.contains("Talk:") && !stringUrl.contains("User:") && !stringUrl.contains("User_talk:")){
                         visited.add(stringUrl);
                         String url = stringUrl.contains("https") ? stringUrl :  "https://" + stringUrl;
                         
                         // Check robots.txt
-                        if (!isAllowedByRobotsTxt(url)) continue;
+                        //if (!isAllowedByRobotsTxt(url)) continue;
                         Document doc = Jsoup.connect(url).get();
                         doc.outputSettings().charset("UTF-8");
 
-                        // Get keywords
+                        // Get revelant information from the website
                         String text = doc.select("p, h1, h2, h3, h4, h5, h6, title").text();
                         String[] words = text.split(" ");
                         List<String> keywords = filterKeywords(words, lem);
+                        String title = doc.title();
+                        String desc = doc.select("meta[name=description]").attr("content");
 
                         // Output information to the database
-                        sendToDatabase(url, keywords);
+                        sendToDatabase(url, keywords, title, desc);
+
+                        // Write discovered urls to the file
+                        List<String> discoveredUrls = doc.select("a").eachAttr("href");
+                        for (String discoveredUrl : discoveredUrls) {
+                            writer.write("fill," + "https://en.wikipedia.org" + discoveredUrl + ",fill\n");
+                        }
+                        writer.flush();
 
                         System.out.println("Scraped " + url);
                     }
@@ -76,6 +88,16 @@ public class Crawler {
         }
     }
 
+    /**
+     * Gets the number of times a keyword appears in the list of keywords.
+     * @param word the word the check
+     * @param keywords the list of words to check the word against
+     * @return number of times a word appears in a list
+     */
+    public static int getNumOccurences(String word, List<String> keywords) {
+        return Math.toIntExact(keywords.stream().filter(keyword -> keyword.equals(word)).count());
+    }
+
 
     /**
      * Send the URL and keywords to the database
@@ -85,19 +107,22 @@ public class Crawler {
      * @throws ClassNotFoundException If the SQLite driver is not found
      * @throws Exception If there is an error closing the resources
      */
-    public static void sendToDatabase(String url, List<String> keywords) {
+    public static void sendToDatabase(String url, List<String> keywords, String title, String description) {
         PreparedStatement pstm = null;
         ResultSet rs = null;
         Connection conn = null;
         try {
-            conn = DriverManager.getConnection("jdbc:sqlite:wikipedia.db");
+            conn = DriverManager.getConnection("jdbc:sqlite:data.db");
             Statement stmt = conn.createStatement();
             conn.setAutoCommit(false);
 
             // Create the urls table
             String createUrlTable = "CREATE TABLE IF NOT EXISTS urls ("
                                     + "url_id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                                    + "url TEXT UNIQUE)";
+                                    + "url TEXT UNIQUE, "
+                                    + "num_keywords INTEGER, " 
+                                    + "title TEXT, "
+                                    + "description TEXT)";
             stmt.execute(createUrlTable);
 
             // Create the keywords table
@@ -107,6 +132,7 @@ public class Crawler {
             // Create the url-keywords table
             String createAssociationTable = "CREATE TABLE IF NOT EXISTS url_keywords("
                                             + "url_id INTEGER, "
+                                            + "num_occurences INTEGER, "
                                             + "keyword_id INTEGER, "
                                             + "PRIMARY KEY (url_id, keyword_id), "
                                             + "UNIQUE (url_id, keyword_id), "
@@ -115,9 +141,12 @@ public class Crawler {
             stmt.execute(createAssociationTable);
 
             // Add url to urls table and save the ids
-            String addUrl = "INSERT OR IGNORE INTO urls (url) VALUES (?)";
+            String addUrl = "INSERT OR IGNORE INTO urls (url, num_keywords, title, description) VALUES (?, ?, ?, ?)";
             pstm = conn.prepareStatement(addUrl, Statement.RETURN_GENERATED_KEYS);
             pstm.setString(1, url);
+            pstm.setInt(2, keywords.size());
+            pstm.setString(3, title);
+            pstm.setString(4, description);
             pstm.executeUpdate();
             rs = pstm.getGeneratedKeys();
             int urlId;
@@ -155,10 +184,11 @@ public class Crawler {
                 }
 
                 // Step 3: Insert URL-Keyword association
-                String insertUrlKeywordSQL = "INSERT OR IGNORE INTO url_keywords (url_id, keyword_id) VALUES (?, ?)";
+                String insertUrlKeywordSQL = "INSERT OR IGNORE INTO url_keywords (url_id, keyword_id, num_occurences) VALUES (?, ?, ?)";
                 pstm = conn.prepareStatement(insertUrlKeywordSQL);
                 pstm.setInt(1, urlId);
                 pstm.setInt(2, keywordId);
+                pstm.setInt(3, getNumOccurences(keyword, keywords));
                 pstm.executeUpdate();
             }
             conn.commit();
