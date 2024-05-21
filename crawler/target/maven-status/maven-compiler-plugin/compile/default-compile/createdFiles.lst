@@ -1,1 +1,6 @@
+com\java\Database.class
+com\java\Statements.class
+com\java\Lemmatizer.class
+com\java\Keyword.class
 com\java\Crawler.class
+com\java\Site.class

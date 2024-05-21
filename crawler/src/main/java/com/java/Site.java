@@ -3,11 +3,11 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.security.Key;
 import java.util.*;
-import javax.swing.text.Document;
-// import com.panforge.robotstxt.RobotsTxt;        //https://github.com/pandzel/RobotsTxt
+import org.jsoup.nodes.Document;
+import org.jsoup.select.Elements;
 
 
-public class Site {
+public class Site implements Comparable<Site> {
     private List<Keyword> keywords;
     private String url;
     private String title;
@@ -16,7 +16,7 @@ public class Site {
     
     
     public Site(String url) {
-        this.url = url.contains("https") ? url :  "https://" + url;
+        this.url = url;
     }
 
     public String getUrl() {
@@ -35,6 +35,25 @@ public class Site {
         return this.title;
     }
 
+    public List<Double> getEmbeddings() {
+        return this.embeddings;
+    }
+
+    public Set<Site> extractLinks(Document doc) {
+        Set<Site> sites = new HashSet<>();
+        Elements els = doc.select("a[href]");
+
+        for (org.jsoup.nodes.Element element : els) {
+            String href = element.attr("abs:href");
+            Site newSite = new Site(href);
+            
+            if (newSite.isValid()) {
+                sites.add(newSite);
+            }
+        }
+        return sites;
+    }
+
 
     public boolean isValid() {
         return this.url.startsWith("https://en.wikipedia.org/wiki")
@@ -42,17 +61,19 @@ public class Site {
         && !this.url.contains("Help:") && !this.url.contains("File:")
         && !this.url.contains("Template:") && !this.url.contains("Category:")
         && !this.url.contains("Wikipedia:") && !this.url.contains("Portal:")
-        && !this.url.contains("Talk:") && !this.url.contains("User:") && !this.url.contains("User_talk:");
+        && !this.url.contains("Talk:") && !this.url.contains("User:") && !this.url.contains("User_talk:")
+        && !this.url.contains("#cite_note") && !this.url.contains("Template talk:");
     }
 
-    
-    public void extractData(Document doc, Lemmatizer lem) {
-        //String text = doc.select("p, h1, h2, h3, h4, h5, h6, title").text();
-        //String[] words = text.split(" ");
 
-        //this.keywords = filterKeywords(lem, words);
-        //this.title = doc.title();
-        //this.description = doc.select("meta[name=description]").attr("content");
+    public void extractData(Document doc, Lemmatizer lem) {
+        String text = doc.select("p, h1, h2, h3, h4, h5, h6, title").text();
+        String[] words = text.split(" ");
+        extractLinks(doc);
+
+        this.keywords = filterKeywords(lem, words);
+        this.title = doc.title();
+        this.description = doc.select("#mw-content-text > div.mw-content-ltr.mw-parser-output > div.shortdescription.nomobile.noexcerpt.noprint.searchaux").text();
     }
 
 
@@ -61,16 +82,16 @@ public class Site {
     * @param words The list of words
     * @return The list of words without the stopwords
     */
-    private List<String> filterKeywords(Lemmatizer lem, String[] words) {
-        List<String> filteredKeywords = new ArrayList<>();
+    private List<Keyword> filterKeywords(Lemmatizer lem, String[] words) {
+        List<Keyword> filteredKeywords = new ArrayList<>();
         try {
-            
             for (String word : words) {
                 Keyword currKeyword = new Keyword(word);
                 
                 if (!currKeyword.isStopword() && currKeyword.isWord()) {
                     String newWord = lem.lemmatizeWord(currKeyword.toString());
-                    filteredKeywords.add(newWord);
+                    Keyword newKeyword = new Keyword(newWord);
+                    filteredKeywords.add(newKeyword);
                 }
             }
         } catch (Exception e) {
@@ -80,39 +101,24 @@ public class Site {
     }
 
 
-
-    public List<List<Double>> getEmbeddings() {
-        try {
-            OpenAiService service = new OpenAiService(System.getenv("OPENAI_API_KEY"));
-            EmbeddingRequest request = new EmbeddingRequest.builder().input(this.keywords).model("text-embedding-3-small").build();
-            EmbeddingResult result = service.createEmbeddings(request);
-            this.embeddings = result.getData();
-            
-
-
+    public Double getTermFrequency(Keyword keyword) {
+        Double count = 0.0;
+        for (Keyword k : this.keywords) {
+            if (k.toString().equals(keyword.toString())) {
+                count++;
+            }
         }
-
+        return count / this.keywords.size();
     }
 
 
-    /**
-    * Checks that a website allows web scraping.
-    * @param targetUrl the url to check.
-    * @return true if the website allows web scraping, false otherwise.
-    */
-    public boolean isAllowedByRobotsTxt() {
-        try {
-            URI url = new URI(this.url);
-            String robots = "https://" + url.getHost() + "/robots.txt";
-            URI robotsUrl = new URI(robots);
+    @Override
+    public String toString() {
+        return this.title;
+    }
 
-            HttpURLConnection connection = (HttpURLConnection) robotsUrl.openConnection();
-            connection.setReadTimeout(2000);
-            RobotsTxt robotsTxt = RobotsTxt.read(connection.getInputStream());
-            return robotsTxt.query("scraper", robotsUrl);
-        } catch (Exception e) {
-            System.out.println(targetUrl + " disallowed scraping: " + e.getMessage());
-        }
-        return false;
+    @Override
+    public int compareTo(Site o) {
+       return this.url.equals(o.url) ? 1 : -1;
     }
 }

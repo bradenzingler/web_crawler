@@ -6,6 +6,34 @@
     "configurations": [
         {
             "type": "java",
+            "name": "IDF",
+            "request": "launch",
+            "mainClass": "com.java.IDF",
+            "projectName": "crawler"
+        },
+        {
+            "type": "java",
+            "name": "Test",
+            "request": "launch",
+            "mainClass": "com.java.Test",
+            "projectName": "crawler"
+        },
+        {
+            "type": "java",
+            "name": "Test",
+            "request": "launch",
+            "mainClass": "Test",
+            "projectName": ""
+        },
+        {
+            "type": "java",
+            "name": "Main",
+            "request": "launch",
+            "mainClass": "com.java.Main",
+            "projectName": "crawler"
+        },
+        {
+            "type": "java",
             "name": "Crawler",
             "request": "launch",
             "mainClass": "com.java.Crawler",
