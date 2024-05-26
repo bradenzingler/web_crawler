@@ -1,0 +1,92 @@
+<html>
+    <head>
+        <title>Web Crawler</title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+        <script src="script.js"></script>
+    </head>
+    <body>
+        <button id="dark-mode-toggle">Dark Mode</button>
+        <h1><a href="https://bradenzingler.github.io/">bradenzingler</a>/web_crawler</h1>
+        <div class="body-content">
+           <h2>Overview</h2>
+           <p>This is a web crawler that I used to scrape relevant information from Wikipedia articles for a 
+            search engine. The web crawler retrieves the document keywords, title, and description from the site
+            and stores them in a database. The search engine then uses this information to return relevant results.
+            The webcrawler is currently restricted to Wikipedia articles, but it could be expanded to other sites through 
+            a small refactor. It is written in Java using Maven, <a href="https://jsoup.org/">Jsoup</a>, and jdbc for SQLite.
+           </p>
+           <h2>How it works</h2>
+           <p>Here is an overview of how each class contributes to the web crawlers functionality.</p>
+           <ul>
+                <li><b>Main.java: </b> The entrypoint of the program. This class initializes the web crawler.</li> 
+                <li><b>Crawler.java: </b> This class is responsible for crawling the web and scraping the relevant information from the site.
+                It manages the loop of the crawler, the queue of sites to visit, and the set of already visited sites. It also 
+                initializes the keyword extraction process for each keyword, and sends the site to the database.</li>
+                <li><b>Database.java: </b> This class is responsible for storing the scraped information in a database. It
+                accepts a Site object, and from there it adds various information from that site into three relational databases
+                for quick searching with the search engine. It also computes the <a href="https://en.wikipedia.org/wiki/Tf%E2%80%93idf#Term_frequency">term frequency</a>.</li>
+                <li><b>Keyword.java: </b> This class is used to store each keyword as an object, with fields for the string keyword and 
+                    methods so I can filter out irrelevant keywords.</li>
+                <li><b>Site.java: </b> This class is used to store each site as an object, allowing me to have attributes like description, title, 
+                    and a list of Keywords.</li>
+                <li><b>Lemmatizer.java: </b> This class is responsible for <a href="https://en.wikipedia.org/wiki/Lemmatization">lemmatizing</a> each keyword.
+                The lemmatizer currently just reads a <a href="https://github.com/michmech/lemmatization-lists/blob/master/lemmatization-en.txt">list</a> 
+                of lemmatized words I found on Github into a hashmap for O(1) lemmatization on each keyword.</li>
+                <li><b>Statements.java: </b> This class is just the storage for each SQLite statement as a final, static string. This 
+                allows me to clean up my Database.java file and make everything more readable, as well as find errors in queries more quickly.</li>
+           </ul>
+           <p>The computation of the TF-IDF value is extremely slow. By the end of running the crawler, there are around 
+            15 million+ unique scenarios for which I need to compute a value and update another value. At first, I attempted to compute them in Java,
+            but the time it took to compute the TF-IDF values for each keyword was too long. I then realized that SQLite has several built-in
+            functions that can compute the TF-IDF values for me. I wrote a script for the TF-IDF computation in SQLite, which sped up the process considerably.
+            It still took ~10 minutes, and there are probably better ways for me to do this, but it works.
+            Here is what the script looks like:
+           </p>
+           <img src="resources/tfidf_script.png" alt="tfidf">
+
+           </p>
+            <h2>Implementation process</h2>
+            <p>After reading up on <a href="https://en.wikipedia.org/wiki/Tf%E2%80%93idf">TF-IDF</a>, I felt that I knew enough
+            to attempt to search data with it. I realized I would first need to gather the data, which inspired this project.
+                Here is my implementation process.</p>
+            <ol>
+                <li>Created the Crawler.java file, implemented basic crawling.</li>
+                <li>Created the Database.java file, after realizing a CSV file was way too slow. Implemented basic database storage.</li>
+                <li>Created the Keyword.java and Site.java file after the Crawler.java file was getting too messy and disorganized.</li>
+                <li>Created the Lemmatizer.java file after realizing I needed to lemmatize each keyword for better search results.</li>
+                <li>Created the Statements.java file after realizing I needed to clean up my Database.java file.</li>
+                <li>Created the Main.java file because I wanted Crawler.java to be non-static.</li>
+            </ol>
+            <h2>Results</h2>
+            <p>The webscraper creates a database file with three tables. Within these three tables it stores the relevant
+                extracted information from the site. Here are several examples:
+            </p>
+            <ul>
+                <li>
+                    <h3>Keywords table</h3>
+                    <p>Stores each keyword's information.</p>
+                    <img src="resources/keywords.png" alt="keywords">
+                </li>
+                <li>
+                    <h3>URLs table</h3>
+                    <p>Stores each article's information.</p>
+                    <img src="resources/urls.png" alt="sites">
+                </li>
+                <li>
+                    <h3>URL_keywords table</h3>
+                    <p>Stores the relationship between each keyword and the article it was found in.</p>
+                    <img src="resources/url_keywords.png" alt="sitekeywords">
+                </li>
+            </ul>
+            <p>The webcrawler does not compute the tfidf score as it is running,
+                because the <a href="https://en.wikipedia.org/wiki/Tf%E2%80%93idf#Inverse_document_frequency">IDF</a> is dependendent on the final number of documents.
+                Here is what the webcrawler outputs as it is running:</p>
+            <img src="resources/output.png" alt="output">
+            <h2>Summary</h2>
+            <p>Looking back, I think I might have used Python as opposed to Java for a program like this.
+                Python has a lot of libraries that would have made this project easier, like <a href="https://www.crummy.com/software/BeautifulSoup/bs4/doc/">BeautifulSoup</a> for web scraping.
+                However, I am glad I did this project in Java because I learned a lot about web scraping, databases, and the TF-IDF algorithm. 
+                Python would have abstracted a lot of the details away.
+            </p>
+    </body>
+</html>

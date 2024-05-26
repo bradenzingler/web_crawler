@@ -40,9 +40,6 @@ public class Crawler {
     }
 
 
-   
-
-
     /**
      * Starts crawling websites in the queue. Adds the extracted data to the database.
      */
