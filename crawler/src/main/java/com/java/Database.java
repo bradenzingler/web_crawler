@@ -6,41 +6,113 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
+
 
 public class Database {
     private Connection conn;
 
     public Database() {
         try {
-            conn = DriverManager.getConnection("jdbc:sqlite:data.db");
+
+            // Init all of our database tables
+            conn = DriverManager.getConnection("jdbc:sqlite:data_with_map.db");
             conn.setAutoCommit(false);
             Statement stmt = conn.createStatement();
             stmt.execute(Statements.CREATE_URL_KEYWORDS_TABLE);
+            stmt.execute(Statements.CREATE_KEYWORDS_TABLE);
+            stmt.execute(Statements.CREATE_URL_TABLE);
+            conn.commit();
         } catch (SQLException e) {
             System.out.println("Failed to connect to database: " + e.getMessage());
         }
     }
 
+
     /**
-     * Add the URL, keywords, and embeddings to the database.
+     * Sends a list of keywords to the keywords table in the database.
+     * @param keywords the list of keywords to send.
+     */
+    private int sendKeyword(Keyword keyword, PreparedStatement keywordsStmt) throws SQLException {
+        keywordsStmt.setString(1, keyword.toString());
+        keywordsStmt.executeUpdate();
+
+        try (ResultSet keys = keywordsStmt.getGeneratedKeys()) {
+            if (keys.next()) {
+                return keys.getInt(1);
+            } else {
+                throw new SQLException("Creating URL failed");
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return -1;
+    }
+
+
+    /**
+     * Sends a URL and it's associated data to the urls table in the database.
+     * @param url the url of the site to add
+     * @param numKeywords the number of keywords for that site
+     * @param description the metadata description for that site
+     * @param title the title of that site
+     * @return the url_id where the url was stored in the table.
+     */
+    private int sendUrl(String url, int numKeywords, String description, String title, PreparedStatement pstm) throws SQLException {
+        pstm.setString(1, url);
+        pstm.setInt(2, numKeywords);
+        pstm.setString(3, description);
+        pstm.setString(4, title);
+        pstm.executeUpdate();
+
+        try (ResultSet keys = pstm.getGeneratedKeys()) {
+            if (keys.next()) {
+                return keys.getInt(1);
+            } else {
+                throw new SQLException("Creating URL failed");
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return -1;
+        }
+    }
+
+
+    /**
+     * Add the URL, keywords, and their associated tables to the database.
+     * This is the main driver for the functionality behind adding to the database.
      * 
      * @param site the site being added to the database.
      */
     public void sendToDatabase(Site site) {
-        try (PreparedStatement pstm = conn.prepareStatement(Statements.INSERT_VALUES)) {
-            String title = site.getTitle();
-            String description = site.getDescription();
-            String url = site.getUrl();
 
-            for (Keyword keyword : site.getKeywords()) {
-                pstm.setString(1, keyword.toString());
-                pstm.setDouble(2, site.getTermFrequency(keyword));
-                pstm.setString(3, url);
-                pstm.setString(4, title);
-                pstm.setString(5, description);
-                pstm.executeUpdate();
+        try (PreparedStatement urlKeywordsStmt = conn.prepareStatement(Statements.INSERT_VALUES_URL_KEYWORDS);
+            PreparedStatement keywordsStmt = conn.prepareStatement(Statements.INSERT_KEYWORDS, Statement.RETURN_GENERATED_KEYS);
+            PreparedStatement urlStmt = conn.prepareStatement(Statements.INSERT_URL, Statement.RETURN_GENERATED_KEYS)) {
+
+            int urlId = sendUrl(site.getUrl(), site.getKeywords().size(), site.getDescription(), site.getTitle(), urlStmt);
+
+            for (Map.Entry<Keyword, Double> entry : site.getKeywords().entrySet()) {
+
+                // Send keyword if new one, get the keyword id
+                Keyword keyword = entry.getKey();
+                sendKeyword(keyword, keywordsStmt);
+                int keywordId = getKeywordId(keyword.toString());
+
+                // Calulate the term frequency for the keyword
+                Double termFrequency = entry.getValue() / site.getKeywords().size();
+
+                // Send all the keyword data to the url_keywords table
+                urlKeywordsStmt.setInt(1, keywordId);
+                urlKeywordsStmt.setInt(2, urlId);
+                urlKeywordsStmt.setDouble(3, termFrequency);
+                urlKeywordsStmt.addBatch();
+               
             }
 
+            urlKeywordsStmt.executeBatch();
             conn.commit();
         } catch (SQLException e) {
             try {
@@ -53,6 +125,7 @@ public class Database {
             System.out.println("Failed to write to database: " + e.getMessage());
         }
     }
+
 
     /**
      * Closes the database connection.
@@ -67,6 +140,7 @@ public class Database {
         }
     }
 
+
     /**
      * Get the total number of documents in the database.
      * 
@@ -75,7 +149,7 @@ public class Database {
     public int getNumDocs() {
         try {
             Statement stmt = conn.createStatement();
-            ResultSet rs = stmt.executeQuery(Statements.TOTAL_NUM_DOCS);
+            ResultSet rs = stmt.executeQuery(Statements.TOTAL_NUM_URLS);
             return rs.getInt(1);
         } catch (SQLException e) {
             System.out.println("Failed to get total number of documents: " + e.getMessage());
@@ -83,48 +157,21 @@ public class Database {
         return 0;
     }
 
+    
     /**
-     * Calculate the IDF (Inverse Document Frequency) for a given term.
+     * Get the keyword id for a given keyword.
      * 
-     * @param term the term for which IDF is calculated
-     * @return the IDF value
+     * @param urlId the id of the document
+     * @return the total number of keywords in the document
      */
-    public double calculateIdf(String term) {
-        try {
-            PreparedStatement pstm = conn.prepareStatement(Statements.GET_NUM_KEYWORDS);
-            pstm.setString(1, term);
+    private int getKeywordId(String keyword) {
+        try (PreparedStatement pstm = conn.prepareStatement(Statements.GET_KEYWORD_ID)) {
+            pstm.setString(1, keyword);
             ResultSet rs = pstm.executeQuery();
-            int numTerms = rs.getInt(1);
-            double idf = Math.log(1 + (getNumDocs() / (double) numTerms));
-            return idf;
+            return rs.getInt(1);
         } catch (SQLException e) {
-            System.out.println("Failed to calculate IDF: " + e.getMessage());
-        }
-        return 0.0;
-    }
-
-    /**
-     * Compute TF-IDF values and store them in the database.
-     */
-    public void computeTfIdf() {
-        try {
-            Statement stmt = conn.createStatement();
-            ResultSet rs = stmt.executeQuery("SELECT * FROM url_keywords");
-            while (rs.next()) {
-                String keyword = rs.getString("keyword");
-                double tf = rs.getDouble("term_frequency");
-                double idf = calculateIdf(keyword); // Calculate IDF for the keyword
-                double tfidf = tf * idf;
-
-                // Update the tfidf column for the current keyword
-                PreparedStatement updateStmt = conn.prepareStatement("UPDATE url_keywords SET tfidf = ? WHERE keyword = ?");
-                updateStmt.setDouble(1, tfidf);
-                updateStmt.setString(2, keyword);
-                updateStmt.executeUpdate();
-            }
-            conn.commit();
-        } catch (SQLException e) {
-            System.out.println("Failed to compute TF-IDF: " + e.getMessage());
+            System.out.println("Failed to get keyword id: " + e.getMessage());
+            return -1;
         }
     }
 }
