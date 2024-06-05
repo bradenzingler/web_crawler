@@ -61,3 +61,37 @@ img {
     background-color: rgb(26, 26, 26);
     color: white;
 }
+
+/* Media Queries for Responsiveness */
+@media (max-width: 1200px) {
+    .body-content {
+        width: 50vw;
+    }
+}
+
+@media (max-width: 1024px) {
+    .body-content {
+        width: 55vw;
+    }
+}
+
+@media (max-width: 768px) {
+    .body-content {
+        width: 70vw;
+    }
+}
+
+@media (max-width: 480px) {
+    .body-content {
+        width: 80vw;
+    }
+}
+
+@media (max-width: 320px) {
+    .body-content {
+        width: 95vw;
+    }
+    h1 {
+        font-size: 1.5rem;
+    }
+}
