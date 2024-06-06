@@ -65,7 +65,7 @@ img {
 /* Media Queries for Responsiveness */
 @media (max-width: 1200px) {
     .body-content {
-        width: 50vw;
+        width: 50rem;
     }
 }
 
